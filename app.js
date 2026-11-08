@@ -394,12 +394,12 @@ async function schedulePingsOnNtfy(pings) {
       const res = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
         method: "POST",
         headers: {
-          "Title": `GM — ${p.label}`,
+          "Title": `GM - ${p.label}`,
           "At": String(unixSec),
           "Click": clickUrl,
           "Tags": "compass,sparkles"
         },
-        body: `Momentary check-in (${p.timeFormatted}). Valid until the next ping arrives — tap when ready.`
+        body: `Momentary check-in (${p.timeFormatted}). Valid until the next ping arrives - tap when ready.`
       });
       results.push(res.ok);
     } catch (err) {
@@ -426,7 +426,7 @@ async function sendImmediateTestPing() {
     const res = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
       method: "POST",
       headers: {
-        "Title": "GM — Live Moment Check-In (EMA)",
+        "Title": "GM - Live Moment Check-In (EMA)",
         "Click": clickUrl,
         "Tags": "zap,spiral_calendar"
       },
@@ -709,6 +709,9 @@ function initApp() {
   });
 
   renderAll();
+  if (state.settings.ghToken && state.settings.ghGistId) {
+    syncGistSilent();
+  }
 }
 
 function switchTab(tabId) {
@@ -1012,8 +1015,22 @@ function renderWeeklyBridgeTab() {
 }
 
 // ==========================================
-// OPTIONAL GITHUB GIST SYNC
+// OPTIONAL GITHUB GIST SYNC (2-WAY MERGE)
 // ==========================================
+function mergeById(localArr = [], remoteArr = []) {
+  const map = new Map();
+  [...remoteArr, ...localArr].forEach((item) => {
+    if (!item || !item.id) return;
+    const prev = map.get(item.id);
+    if (!prev || new Date(item.timestamp || 0) >= new Date(prev.timestamp || 0)) {
+      map.set(item.id, item);
+    }
+  });
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0)
+  );
+}
+
 async function syncWithGitHubGist(interactive = false) {
   const token = (state.settings.ghToken || "").trim();
   if (!token) {
@@ -1030,15 +1047,18 @@ async function syncWithGitHubGist(interactive = false) {
 
   try {
     if (!gistId) {
+      const payloadState = JSON.parse(JSON.stringify(state));
+      delete payloadState.settings.ghToken; // Never store token inside Gist file
+
       const res = await fetch("https://api.github.com/gists", {
         method: "POST",
         headers,
         body: JSON.stringify({
-          description: "GM (General Manager) Sync State",
+          description: "GM (General Manager) Private Sync State",
           public: false,
           files: {
             "gm_state.json": {
-              content: JSON.stringify(state, null, 2)
+              content: JSON.stringify(payloadState, null, 2)
             }
           }
         })
@@ -1049,24 +1069,54 @@ async function syncWithGitHubGist(interactive = false) {
         const gistInput = document.getElementById("gh-gist-id-input");
         if (gistInput) gistInput.value = data.id;
         saveState();
-        if (interactive) showToast("Created & synced private Gist!");
+        if (interactive) showToast(`Created private Gist: ${data.id}`);
       } else if (interactive) {
         showToast(`GitHub HTTP ${res.status}`);
       }
     } else {
-      const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      // 1. Fetch existing Gist to merge remote + local
+      const getRes = await fetch(`https://api.github.com/gists/${gistId}`, { headers });
+      if (getRes.ok) {
+        const gistData = await getRes.json();
+        const rawContent = gistData.files?.["gm_state.json"]?.content;
+        if (rawContent) {
+          const remote = JSON.parse(rawContent);
+          state.emas = mergeById(state.emas, remote.emas);
+          state.days = mergeById(state.days, remote.days);
+          state.weeks = mergeById(state.weeks, remote.weeks);
+          if (!state.settings.ntfyTopic && remote.settings?.ntfyTopic) {
+            state.settings.ntfyTopic = remote.settings.ntfyTopic;
+            const topicInput = document.getElementById("ntfy-topic-input");
+            if (topicInput) topicInput.value = state.settings.ntfyTopic;
+          }
+          const localSleep = new Date(state.activePlan?.lastSleepAt || 0).getTime();
+          const remoteSleep = new Date(remote.activePlan?.lastSleepAt || 0).getTime();
+          if (remoteSleep > localSleep && remote.activePlan) {
+            state.activePlan = remote.activePlan;
+          }
+        }
+      }
+
+      // 2. Push merged state back to Gist
+      const payloadState = JSON.parse(JSON.stringify(state));
+      delete payloadState.settings.ghToken;
+
+      const patchRes = await fetch(`https://api.github.com/gists/${gistId}`, {
         method: "PATCH",
         headers,
         body: JSON.stringify({
           files: {
             "gm_state.json": {
-              content: JSON.stringify(state, null, 2)
+              content: JSON.stringify(payloadState, null, 2)
             }
           }
         })
       });
-      if (res.ok && interactive) {
-        showToast("Synced with private GitHub Gist!");
+      saveState();
+      if (patchRes.ok && interactive) {
+        showToast("Synced & merged with private GitHub Gist!");
+      } else if (!patchRes.ok && interactive) {
+        showToast(`GitHub HTTP ${patchRes.status}`);
       }
     }
   } catch (e) {
