@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>GM — General Manager</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-top">
+      <div class="brand">
+        <h1>GM</h1>
+        <span>Sencillo Life Engine</span>
+      </div>
+      <div id="live-clock" class="clock-pill">--:--</div>
+    </div>
+
+    <!-- Active GM Card Banner -->
+    <div class="gm-active-card" id="active-gm-banner">
+      <div class="gm-card-row">
+        <span class="gm-card-label" id="banner-day-label">Day 1 Plan</span>
+        <div class="memory-tags" id="banner-target-states"></div>
+      </div>
+      <div class="gm-card-row">
+        <div class="memory-tags" id="banner-focus-domains"></div>
+        <span id="banner-wake-info" style="color: var(--text-muted); font-size: 0.76rem;">Window: 05:30–23:00</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- TAB 1: MOMENT (EMA) -->
+    <section id="tab-ema" class="tab-panel active">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Moment Check-In (EMA)</div>
+            <div class="card-subtitle" id="ema-window-status">Open until the next ping arrives — take your time.</div>
+          </div>
+          <span class="badge" id="ema-slot-badge">Live Moment</span>
+        </div>
+
+        <div id="ema-grammar-mount"></div>
+
+        <button class="primary-btn" id="save-ema-btn">Log Moment Snapshot</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Today's Moments</div>
+            <div class="card-subtitle">Snapshots captured across today's waking window</div>
+          </div>
+          <span class="badge" id="today-ema-count">0 logged</span>
+        </div>
+        <div id="today-ema-list" class="memory-list"></div>
+      </div>
+    </section>
+
+    <!-- TAB 2: NIGHTLY CLOSE & SLEEP NOW (+7H) -->
+    <section id="tab-day" class="tab-panel">
+      <!-- Memory Bridge: Today's EMAs -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Today's Memory Bridge</div>
+            <div class="card-subtitle">Your momentary pings from today to ground your rating</div>
+          </div>
+          <span class="badge" id="bridge-day-avg">Avg: --</span>
+        </div>
+        <div id="night-ema-bridge" class="memory-list"></div>
+      </div>
+
+      <!-- Rate Today -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">1. Evaluate Today</div>
+            <div class="card-subtitle">Same grammar as your moments: how did today feel & work?</div>
+          </div>
+        </div>
+        <div id="day-grammar-mount"></div>
+        <button class="secondary-btn" id="save-day-only-btn">Save Day Rating Only</button>
+      </div>
+
+      <!-- Plan Tomorrow & Sleep Now (+7h) -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">2. Tomorrow's GM Card & Sleep (+7h)</div>
+            <div class="card-subtitle">Set tomorrow's target mode, focus anchors & guardrails</div>
+          </div>
+        </div>
+
+        <div id="tomorrow-plan-mount"></div>
+
+        <button class="primary-btn sleep-btn" id="sleep-now-btn">
+          🌙 Sleep Now (+7h Alarm & Arm 3 Random Pings)
+        </button>
+
+        <!-- Wake & Alarm Result Panel -->
+        <div class="alarm-result-box" id="alarm-result-box">
+          <div style="font-size: 0.82rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">
+            Target Wake-Up Time (+7 Hours)
+          </div>
+          <div class="wake-time-giant" id="wake-time-display">07:15</div>
+          <div id="scheduled-pings-summary" style="font-size: 0.83rem; color: var(--text);"></div>
+          <div class="btn-row">
+            <a id="android-alarm-link" class="secondary-btn" style="text-decoration: none; display: inline-flex; align-items: center;">
+              ⏰ Open Android Clock
+            </a>
+            <button class="secondary-btn" id="copy-voice-alarm-btn">
+              🎙️ Copy "Set alarm for ..."
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: WEEKLY GM REVIEW (MEMORY-BRIDGED) -->
+    <section id="tab-week" class="tab-panel">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">7-Day Memory Bridge</div>
+            <div class="card-subtitle">Your past 7 days of Day ratings & EMA snapshots side by side</div>
+          </div>
+          <span class="badge" id="week-bridge-avg">7d Avg: --</span>
+        </div>
+
+        <div>
+          <div class="section-label">Daily Trail (Last 7 Days)</div>
+          <div id="week-days-bridge" class="memory-list"></div>
+        </div>
+
+        <div>
+          <div class="section-label">Domain & Guardrail Hits (EMAs + Days)</div>
+          <div id="week-domain-bars" class="domain-bar-list"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Evaluate the Week</div>
+            <div class="card-subtitle">Rate the week as a whole & choose next week's focus</div>
+          </div>
+        </div>
+        <div id="week-grammar-mount"></div>
+        <button class="primary-btn" id="save-week-btn">Save Weekly GM Review</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Past Weekly Reviews</div>
+          </div>
+        </div>
+        <div id="past-weeks-list" class="memory-list"></div>
+      </div>
+    </section>
+
+    <!-- TAB 4: SETUP, NTFY & SYNC -->
+    <section id="tab-setup" class="tab-panel">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Smartphone Pings (ntfy.sh — $0 Free)</div>
+            <div class="card-subtitle">Install the free 'ntfy' app on Android and subscribe to your private topic below.</div>
+          </div>
+        </div>
+
+        <div>
+          <div class="section-label">Your Private ntfy Topic</div>
+          <input type="text" id="ntfy-topic-input" class="text-input" placeholder="e.g. gm-cruzadl-8492" />
+        </div>
+
+        <div>
+          <div class="section-label">App URL Opened When You Tap a Ping</div>
+          <input type="text" id="app-url-input" class="text-input" placeholder="https://cruzadl.github.io/gm/" />
+        </div>
+
+        <div>
+          <div class="section-label">Hard Daily Clock Guardrail</div>
+          <div style="font-size: 0.85rem; color: var(--text-muted);">
+            Active Window: <strong>05:30 to 23:00</strong> (3 random pings scheduled after your +7h sleep).
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="primary-btn" id="send-test-ping-btn">📲 Send Live Test Ping to My Phone Now</button>
+          <button class="secondary-btn" id="schedule-today-pings-btn">🎲 Schedule 3 Random Pings for Next Window</button>
+        </div>
+        <div id="ping-log-box" style="font-size: 0.82rem; color: var(--text-muted);"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Storage, Backup & Mac ↔ Android Sync</div>
+            <div class="card-subtitle">All data saves automatically on your device. Export JSON anytime or connect a private GitHub Gist.</div>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="secondary-btn" id="export-json-btn">⬇️ Export Backup (.json)</button>
+          <label class="secondary-btn" style="cursor: pointer; display: inline-flex; align-items: center;">
+            ⬆️ Import Backup
+            <input type="file" id="import-json-input" accept=".json" style="display: none;" />
+          </label>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border);" />
+
+        <div>
+          <div class="section-label">Optional: Private GitHub Gist Auto-Sync</div>
+          <input type="password" id="gh-token-input" class="text-input" placeholder="GitHub Personal Access Token (gist scope)" style="margin-bottom: 8px;" />
+          <input type="text" id="gh-gist-id-input" class="text-input" placeholder="Gist ID (leave blank to create automatically)" />
+        </div>
+        <div class="btn-row">
+          <button class="secondary-btn" id="sync-gist-btn">🔄 Save & Sync with GitHub Gist</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Bottom Tab Navigation -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="tab-ema">
+      <span class="tab-icon">⚡</span>
+      <span>Moment (EMA)</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-day">
+      <span class="tab-icon">🌙</span>
+      <span>Night (+7h)</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-week">
+      <span class="tab-icon">🧭</span>
+      <span>Weekly GM</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-setup">
+      <span class="tab-icon">⚙️</span>
+      <span>Setup & Pings</span>
+    </button>
+  </nav>
+
+  <div id="status-toast" class="status-toast">Saved</div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "GM — General Manager",
+  "short_name": "GM",
+  "description": "Sencillo Fractal Evaluation Engine: Moment (EMA), Day (+7h Sleep), and Weekly GM Review.",
+  "start_url": "./index.html?view=ema",
+  "display": "standalone",
+  "background_color": "#0f141c",
+  "theme_color": "#0f141c",
+  "orientation": "portrait-primary"
+}
