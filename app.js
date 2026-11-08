@@ -1038,7 +1038,7 @@ async function syncWithGitHubGist(interactive = false) {
     return;
   }
 
-  const gistId = (state.settings.ghGistId || "").trim();
+  let gistId = (state.settings.ghGistId || "").trim();
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -1046,6 +1046,23 @@ async function syncWithGitHubGist(interactive = false) {
   };
 
   try {
+    // Auto-discover existing gm_state.json Gist if Gist ID is left blank!
+    if (!gistId) {
+      const listRes = await fetch("https://api.github.com/gists?per_page=50", { headers });
+      if (listRes.ok) {
+        const gists = await listRes.json();
+        const found = Array.isArray(gists)
+          ? gists.find((g) => g.files && g.files["gm_state.json"])
+          : null;
+        if (found) {
+          gistId = found.id;
+          state.settings.ghGistId = gistId;
+          const gistInput = document.getElementById("gh-gist-id-input");
+          if (gistInput) gistInput.value = gistId;
+        }
+      }
+    }
+
     if (!gistId) {
       const payloadState = JSON.parse(JSON.stringify(state));
       delete payloadState.settings.ghToken; // Never store token inside Gist file
@@ -1069,9 +1086,9 @@ async function syncWithGitHubGist(interactive = false) {
         const gistInput = document.getElementById("gh-gist-id-input");
         if (gistInput) gistInput.value = data.id;
         saveState();
-        if (interactive) showToast(`Created private Gist: ${data.id}`);
+        if (interactive) showToast(`Created & connected Gist: ${data.id}`);
       } else if (interactive) {
-        showToast(`GitHub HTTP ${res.status}`);
+        showToast(`GitHub HTTP ${res.status} (check token)`);
       }
     } else {
       // 1. Fetch existing Gist to merge remote + local
