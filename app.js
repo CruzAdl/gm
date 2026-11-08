@@ -42,14 +42,11 @@ function loadInitialState() {
   }
 
   // Default state pre-loaded with Day 1 GM Plan from tonight's session
-  const defaultOrigin =
-    window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-      ? "http://192.168.1.230:8491/"
-      : window.location.origin + window.location.pathname;
+  const defaultOrigin = window.location.origin + window.location.pathname;
 
   return {
     settings: {
-      ntfyTopic: "gm-cruzadl-7491",
+      ntfyTopic: "",
       appUrl: defaultOrigin,
       clockWindowStart: "05:30",
       clockWindowEnd: "23:00",
