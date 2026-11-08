@@ -639,14 +639,23 @@ function initApp() {
   tokenInput.value = state.settings.ghToken || "";
   gistInput.value = state.settings.ghGistId || "";
 
-  topicInput.addEventListener("change", () => {
+  topicInput.addEventListener("input", () => {
     state.settings.ntfyTopic = topicInput.value.trim();
     saveState();
-    showToast("ntfy topic updated");
   });
 
-  urlInput.addEventListener("change", () => {
+  urlInput.addEventListener("input", () => {
     state.settings.appUrl = urlInput.value.trim();
+    saveState();
+  });
+
+  tokenInput.addEventListener("input", () => {
+    state.settings.ghToken = tokenInput.value.trim();
+    saveState();
+  });
+
+  gistInput.addEventListener("input", () => {
+    state.settings.ghGistId = gistInput.value.trim();
     saveState();
   });
 
