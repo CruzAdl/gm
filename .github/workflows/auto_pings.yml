@@ -1,0 +1,62 @@
+name: Auto-Schedule Daily EMA Pings (4 AM Fallback)
+
+on:
+  schedule:
+    # Runs at 04:00 UTC every morning
+    - cron: '0 4 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI anytime
+
+jobs:
+  schedule-pings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calculate and Schedule 3 Random Pings via ntfy
+        run: |
+          python3 -c '
+          import time, random, urllib.request, json
+
+          # 04:00 UTC trigger for waking window (05:30 to 23:00 UTC)
+          now = time.time()
+          gm = time.gmtime(now)
+          
+          # Today 05:30 UTC
+          start_today = now + ((5 * 3600 + 30 * 60) - (gm.tm_hour * 3600 + gm.tm_min * 60 + gm.tm_sec))
+          # Today 23:00 UTC
+          end_today = now + (23 * 3600 - (gm.tm_hour * 3600 + gm.tm_min * 60 + gm.tm_sec))
+
+          total_ms = end_today - start_today
+          block_ms = total_ms / 3.0
+
+          pings = []
+          labels = ["Morning Ping (1/3)", "Midday Ping (2/3)", "Evening Ping (3/3)"]
+
+          for i in range(3):
+              b_start = start_today + i * block_ms + 600
+              b_end = start_today + (i + 1) * block_ms - 600
+              rand_ts = int(random.uniform(b_start, b_end))
+              pings.append((labels[i], rand_ts))
+
+          topic = "gm-cruzadl-7491"
+          click_url = "https://cruzadl.github.io/gm/?view=ema"
+
+          for label, ts in pings:
+              time_str = time.strftime("%H:%M", time.gmtime(ts))
+              body_text = f"Momentary check-in ({time_str}). Valid until the next ping arrives - tap when ready."
+              req = urllib.request.Request(
+                  f"https://ntfy.sh/{topic}",
+                  data=body_text.encode("utf-8"),
+                  headers={
+                      "Title": f"GM - {label}",
+                      "At": str(ts),
+                      "Click": click_url,
+                      "Tags": "compass,sparkles"
+                  },
+                  method="POST"
+              )
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      res = json.loads(resp.read().decode("utf-8"))
+                      print(f"Scheduled {label} at {time_str} UTC: {res.get(\"id\")}")
+              except Exception as e:
+                  print(f"Failed to schedule {label}: {e}")
+          '

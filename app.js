@@ -65,7 +65,8 @@ function loadInitialState() {
       note: "Day 1: Responsibilities + Sport goals, keep an eye on XB15",
       lastSleepAt: null,
       targetWakeAt: null,
-      scheduledPings: []
+      scheduledPings: [],
+      lastAutoScheduleDateKey: null
     },
     emas: [],
     days: [],
@@ -445,12 +446,48 @@ async function sendImmediateTestPing() {
   }
 }
 
+async function ensureDailyPingsScheduled() {
+  const todayKey = getLocalDateKey();
+  const plan = state.activePlan || {};
+  const topic = (state.settings?.ntfyTopic || "").trim();
+  if (!topic) return;
+
+  // Check if today already has active future or fired pings scheduled
+  const hasFuturePings = (plan.scheduledPings || []).some(
+    (p) => new Date(p.timestampMs).getDate() === new Date().getDate()
+  );
+
+  // If already auto-scheduled for today, don't double schedule
+  if (plan.lastAutoScheduleDateKey === todayKey && hasFuturePings) {
+    return;
+  }
+
+  // Need auto-schedule! If sleep was not tapped, construct baseline for today
+  const now = new Date();
+  const currentHour = now.getHours();
+
+  // If it's before 21:00, schedule remaining pings for today
+  if (currentHour < 21) {
+    console.log("Auto-scheduling fallback EMA pings for today...");
+    const pings = computeThreeRandomPings(now);
+    state.activePlan = state.activePlan || {};
+    state.activePlan.scheduledPings = pings;
+    state.activePlan.lastAutoScheduleDateKey = todayKey;
+    saveState();
+
+    const res = await schedulePingsOnNtfy(pings);
+    if (res.ok) {
+      console.log(`Auto-scheduled ${res.count} EMA pings for today.`);
+    }
+  }
+}
+
 // ==========================================
 // INITIALIZE WIDGETS & EVENT HANDLERS
 // ==========================================
 let emaWidget, dayWidget, tomorrowWidget, weekWidget;
 
-function initApp() {
+async function initApp() {
   // Live clock
   const updateClock = () => {
     const el = document.getElementById("live-clock");
@@ -458,6 +495,9 @@ function initApp() {
   };
   updateClock();
   setInterval(updateClock, 10000);
+
+  // Auto-schedule watchdog: ensures if Nightly close was forgotten, pings are armed automatically!
+  ensureDailyPingsScheduled();
 
   // Build Grammar Widgets
   emaWidget = createGrammarWidget("ema-grammar-mount", {
