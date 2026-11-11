@@ -66,7 +66,10 @@ function loadInitialState() {
       lastSleepAt: null,
       targetWakeAt: null,
       scheduledPings: [],
-      lastAutoScheduleDateKey: null
+      scheduledDateKey: null,
+      lastAutoScheduleDateKey: null,
+      ntfyArmed: false,
+      activePlanUpdatedAt: null
     },
     emas: [],
     days: [],
@@ -369,12 +372,16 @@ function computeThreeRandomPings(wakeDateObj) {
     // Pad by 10 mins inside each block so back-to-back boundary collisions don't happen
     const pad = Math.min(10 * 60 * 1000, Math.floor(blockMs * 0.15));
     const randTs = Math.floor(bStart + pad + Math.random() * (bEnd - bStart - 2 * pad));
+    const randDate = new Date(randTs);
+    const dateKey = getLocalDateKey(randDate);
     pings.push({
       slot: i + 1,
       label: slotLabels[i],
       timestampMs: randTs,
-      iso: new Date(randTs).toISOString(),
-      timeFormatted: formatTimeHHMM(new Date(randTs)),
+      iso: randDate.toISOString(),
+      dateKey,
+      sequenceId: `gm-${dateKey}-slot-${i + 1}`,
+      timeFormatted: formatTimeHHMM(randDate),
       answered: false
     });
   }
@@ -382,21 +389,43 @@ function computeThreeRandomPings(wakeDateObj) {
   return pings;
 }
 
+function getPingDateKey(ping) {
+  if (!ping) return null;
+  if (ping.dateKey) return ping.dateKey;
+  if (ping.timestampMs) return getLocalDateKey(new Date(ping.timestampMs));
+  return null;
+}
+
+function hasArmedPingsForDate(plan, dateKey) {
+  if (!plan || plan.ntfyArmed === false) return false;
+  const pings = plan.scheduledPings || [];
+  if (!pings.length) return false;
+  return pings.some((p) => getPingDateKey(p) === dateKey);
+}
+
 async function schedulePingsOnNtfy(pings) {
   const topic = (state.settings.ntfyTopic || "").trim();
-  if (!topic) return { ok: false, error: "No ntfy topic configured" };
+  if (!topic) return { ok: false, count: 0, error: "No ntfy topic configured" };
 
   const clickUrl = `${state.settings.appUrl || window.location.href.split("?")[0]}?view=ema`;
   const results = [];
+  const nowMs = Date.now();
 
   for (const p of pings) {
+    // Skip any slot already in the past so ntfy.sh doesn't reject it
+    if (p.timestampMs <= nowMs + 30 * 1000) {
+      continue;
+    }
     const unixSec = Math.floor(p.timestampMs / 1000);
+    const dateKey = getPingDateKey(p) || getLocalDateKey(new Date(p.timestampMs));
+    const seqId = p.sequenceId || `gm-${dateKey}-slot-${p.slot || 1}`;
     try {
       const res = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
         method: "POST",
         headers: {
           "Title": `GM - ${p.label}`,
           "At": String(unixSec),
+          "X-Sequence-ID": seqId,
           "Click": clickUrl,
           "Tags": "compass,sparkles"
         },
@@ -409,7 +438,8 @@ async function schedulePingsOnNtfy(pings) {
     }
   }
 
-  return { ok: results.every(Boolean), count: results.filter(Boolean).length };
+  const okCount = results.filter(Boolean).length;
+  return { ok: results.length > 0 && results.every(Boolean), count: okCount };
 }
 
 async function sendImmediateTestPing() {
@@ -446,19 +476,18 @@ async function sendImmediateTestPing() {
   }
 }
 
+let isSchedulingPings = false;
+
 async function ensureDailyPingsScheduled() {
+  if (isSchedulingPings) return;
+
   const todayKey = getLocalDateKey();
   const plan = state.activePlan || {};
   const topic = (state.settings?.ntfyTopic || "").trim();
   if (!topic) return;
 
-  // Check if today already has active future or fired pings scheduled
-  const hasFuturePings = (plan.scheduledPings || []).some(
-    (p) => new Date(p.timestampMs).getDate() === new Date().getDate()
-  );
-
-  // If already auto-scheduled for today, don't double schedule
-  if (plan.lastAutoScheduleDateKey === todayKey && hasFuturePings) {
+  // Check if today already has armed pings (from Sleep Now, GitHub Actions, or browser watchdog)
+  if (hasArmedPingsForDate(plan, todayKey)) {
     return;
   }
 
@@ -468,16 +497,27 @@ async function ensureDailyPingsScheduled() {
 
   // If it's before 21:00, schedule remaining pings for today
   if (currentHour < 21) {
-    console.log("Auto-scheduling fallback EMA pings for today...");
-    const pings = computeThreeRandomPings(now);
-    state.activePlan = state.activePlan || {};
-    state.activePlan.scheduledPings = pings;
-    state.activePlan.lastAutoScheduleDateKey = todayKey;
-    saveState();
+    isSchedulingPings = true;
+    try {
+      console.log("Auto-scheduling fallback EMA pings for today...");
+      const pings = computeThreeRandomPings(now);
+      const pingsDateKey = getPingDateKey(pings[0]) || todayKey;
+      const res = await schedulePingsOnNtfy(pings);
 
-    const res = await schedulePingsOnNtfy(pings);
-    if (res.ok) {
-      console.log(`Auto-scheduled ${res.count} EMA pings for today.`);
+      state.activePlan = state.activePlan || {};
+      state.activePlan.scheduledPings = pings;
+      state.activePlan.scheduledDateKey = pingsDateKey;
+      state.activePlan.lastAutoScheduleDateKey = pingsDateKey;
+      state.activePlan.ntfyArmed = res.count > 0;
+      state.activePlan.activePlanUpdatedAt = new Date().toISOString();
+      saveState();
+
+      if (res.count > 0) {
+        console.log(`Auto-scheduled ${res.count} EMA pings for ${pingsDateKey}.`);
+        syncGistSilent();
+      }
+    } finally {
+      isSchedulingPings = false;
     }
   }
 }
@@ -495,9 +535,6 @@ async function initApp() {
   };
   updateClock();
   setInterval(updateClock, 10000);
-
-  // Auto-schedule watchdog: ensures if Nightly close was forgotten, pings are armed automatically!
-  ensureDailyPingsScheduled();
 
   // Build Grammar Widgets
   emaWidget = createGrammarWidget("ema-grammar-mount", {
@@ -607,13 +644,18 @@ async function initApp() {
     const now = new Date();
     const wakeDate = new Date(now.getTime() + 7 * 3600 * 1000);
     const pings = computeThreeRandomPings(wakeDate);
+    const scheduledDateKey = getPingDateKey(pings[0]) || getLocalDateKey(wakeDate);
 
     state.activePlan = {
       ...planVal,
-      targetDateKey: getLocalDateKey(wakeDate),
+      targetDateKey: scheduledDateKey,
+      scheduledDateKey,
+      lastAutoScheduleDateKey: scheduledDateKey,
       lastSleepAt: now.toISOString(),
       targetWakeAt: wakeDate.toISOString(),
-      scheduledPings: pings
+      scheduledPings: pings,
+      ntfyArmed: false,
+      activePlanUpdatedAt: now.toISOString()
     };
 
     saveState();
@@ -634,6 +676,10 @@ async function initApp() {
 
     // 4. Schedule via ntfy.sh
     const schedRes = await schedulePingsOnNtfy(pings);
+    state.activePlan.ntfyArmed = schedRes.count > 0;
+    state.activePlan.activePlanUpdatedAt = new Date().toISOString();
+    saveState();
+
     if (schedRes.ok) {
       summaryEl.innerHTML = `✅ <strong>3 Random Pings Armed</strong> on <code>${state.settings.ntfyTopic}</code> for tomorrow's window (05:30–23:00): <strong>${pings.map((p) => p.timeFormatted).join(" · ")}</strong>`;
     } else {
@@ -708,16 +754,25 @@ async function initApp() {
   document.getElementById("schedule-today-pings-btn").addEventListener("click", async () => {
     state.settings.ntfyTopic = topicInput.value.trim();
     const pings = computeThreeRandomPings(new Date());
-    state.activePlan.scheduledPings = pings;
-    saveState();
+    const pingsDateKey = getPingDateKey(pings[0]) || getLocalDateKey();
     const res = await schedulePingsOnNtfy(pings);
+    state.activePlan = state.activePlan || {};
+    state.activePlan.scheduledPings = pings;
+    state.activePlan.scheduledDateKey = pingsDateKey;
+    state.activePlan.lastAutoScheduleDateKey = pingsDateKey;
+    state.activePlan.ntfyArmed = res.count > 0;
+    state.activePlan.activePlanUpdatedAt = new Date().toISOString();
+    saveState();
     const logBox = document.getElementById("ping-log-box");
     if (logBox) {
       logBox.innerHTML = res.ok
         ? `✅ Scheduled 3 random pings on <code>${state.settings.ntfyTopic}</code> at: <strong>${pings.map((p) => p.timeFormatted).join(" · ")}</strong>`
         : `⚠️ Could not reach ntfy.sh — check connection.`;
     }
-    showToast("Scheduled 3 random pings!");
+    if (res.count > 0) {
+      showToast("Scheduled 3 random pings!");
+      syncGistSilent();
+    }
   });
 
   // JSON Export / Import
@@ -758,9 +813,11 @@ async function initApp() {
   });
 
   renderAll();
-  if (state.settings.ghToken && state.settings.ghGistId) {
-    syncGistSilent();
+  if (state.settings.ghToken) {
+    await syncGistSilent();
   }
+  // Run auto-schedule watchdog AFTER Gist sync so we never double-schedule across devices!
+  await ensureDailyPingsScheduled();
 }
 
 function switchTab(tabId) {
@@ -773,7 +830,10 @@ function switchTab(tabId) {
 }
 
 function getCurrentActivePingSlot(now = new Date()) {
-  const pings = state.activePlan?.scheduledPings || [];
+  const todayKey = getLocalDateKey(now);
+  const pings = (state.activePlan?.scheduledPings || []).filter(
+    (p) => getPingDateKey(p) === todayKey
+  );
   if (!pings.length) return null;
   // A ping stays valid from when it fires until the next ping arrives!
   let active = null;
@@ -1155,10 +1215,30 @@ async function syncWithGitHubGist(interactive = false) {
             const topicInput = document.getElementById("ntfy-topic-input");
             if (topicInput) topicInput.value = state.settings.ntfyTopic;
           }
-          const localSleep = new Date(state.activePlan?.lastSleepAt || 0).getTime();
-          const remoteSleep = new Date(remote.activePlan?.lastSleepAt || 0).getTime();
-          if (remoteSleep > localSleep && remote.activePlan) {
+          const getPlanTime = (plan) =>
+            Math.max(
+              new Date(plan?.activePlanUpdatedAt || 0).getTime(),
+              new Date(plan?.lastSleepAt || 0).getTime()
+            );
+          const todayKey = getLocalDateKey();
+          const localPlanTime = getPlanTime(state.activePlan);
+          const remotePlanTime = getPlanTime(remote.activePlan);
+          if (remote.activePlan && remotePlanTime > localPlanTime) {
             state.activePlan = remote.activePlan;
+          } else if (
+            remote.activePlan &&
+            !hasArmedPingsForDate(state.activePlan, todayKey) &&
+            hasArmedPingsForDate(remote.activePlan, todayKey)
+          ) {
+            state.activePlan = {
+              ...(state.activePlan || {}),
+              scheduledPings: remote.activePlan.scheduledPings,
+              scheduledDateKey: remote.activePlan.scheduledDateKey || todayKey,
+              lastAutoScheduleDateKey: remote.activePlan.lastAutoScheduleDateKey || todayKey,
+              ntfyArmed: remote.activePlan.ntfyArmed !== false,
+              activePlanUpdatedAt:
+                remote.activePlan.activePlanUpdatedAt || new Date().toISOString()
+            };
           }
         }
       }
@@ -1192,8 +1272,9 @@ async function syncWithGitHubGist(interactive = false) {
 
 function syncGistSilent() {
   if (state.settings.ghToken) {
-    syncWithGitHubGist(false);
+    return syncWithGitHubGist(false);
   }
+  return Promise.resolve();
 }
 
 function escapeHtml(str) {

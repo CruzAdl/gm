@@ -2,7 +2,7 @@ name: Auto-Schedule Daily EMA Pings (4 AM Fallback)
 
 on:
   schedule:
-    # Runs at 04:00 UTC every morning
+    # Runs at 04:00 UTC every morning (04:00 GMT / 05:00 BST)
     - cron: '0 4 * * *'
   workflow_dispatch: # Allows manual trigger from GitHub UI anytime
 
@@ -11,52 +11,149 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Calculate and Schedule 3 Random Pings via ntfy
+        env:
+          GH_GIST_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
+          GH_GIST_ID: ${{ secrets.GH_GIST_ID }}
         run: |
-          python3 -c '
-          import time, random, urllib.request, json
+          python3 - <<'EOF'
+          import datetime as dt
+          import json
+          import os
+          import random
+          import sys
+          import urllib.request
+          from zoneinfo import ZoneInfo
 
-          # 04:00 UTC trigger for waking window (05:30 to 23:00 UTC)
-          now = time.time()
-          gm = time.gmtime(now)
-          
-          # Today 05:30 UTC
-          start_today = now + ((5 * 3600 + 30 * 60) - (gm.tm_hour * 3600 + gm.tm_min * 60 + gm.tm_sec))
-          # Today 23:00 UTC
-          end_today = now + (23 * 3600 - (gm.tm_hour * 3600 + gm.tm_min * 60 + gm.tm_sec))
+          TZ = ZoneInfo("Europe/London")
+          TOPIC = "gm-cruzadl-7491"
+          CLICK_URL = "https://cruzadl.github.io/gm/?view=ema"
 
-          total_ms = end_today - start_today
-          block_ms = total_ms / 3.0
+          now_local = dt.datetime.now(TZ)
+          now_ts = int(now_local.timestamp())
+          today_key = now_local.strftime("%Y-%m-%d")
 
-          pings = []
+          def get_ping_date_key(ping):
+              if ping.get("dateKey"):
+                  return ping["dateKey"]
+              ts_ms = ping.get("timestampMs")
+              if ts_ms:
+                  return dt.datetime.fromtimestamp(ts_ms / 1000.0, TZ).strftime("%Y-%m-%d")
+              return None
+
+          def gh_request(url, token, method="GET", payload=None):
+              headers = {
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+                  "User-Agent": "gm-auto-pings",
+              }
+              data = json.dumps(payload).encode("utf-8") if payload is not None else None
+              req = urllib.request.Request(url, data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  return json.loads(resp.read().decode("utf-8"))
+
+          gist_token = (os.environ.get("GH_GIST_TOKEN") or "").strip()
+          gist_id = (os.environ.get("GH_GIST_ID") or "").strip()
+          remote_state = None
+
+          if gist_token:
+              try:
+                  if not gist_id:
+                      gists = gh_request("https://api.github.com/gists?per_page=50", gist_token)
+                      for g in gists:
+                          if "gm_state.json" in (g.get("files") or {}):
+                              gist_id = g["id"]
+                              break
+                  if gist_id:
+                      gist_data = gh_request(f"https://api.github.com/gists/{gist_id}", gist_token)
+                      raw = gist_data.get("files", {}).get("gm_state.json", {}).get("content")
+                      if raw:
+                          remote_state = json.loads(raw)
+                          plan = remote_state.get("activePlan") or {}
+                          if plan.get("ntfyArmed") is not False:
+                              existing = plan.get("scheduledPings") or []
+                              if any(get_ping_date_key(p) == today_key for p in existing):
+                                  print(f"Pings already armed for {today_key} in Gist — skipping fallback.")
+                                  sys.exit(0)
+              except Exception as exc:
+                  print(f"Warning: could not check Gist state ({exc}); continuing with ntfy Sequence-ID guard.")
+
+          start_today = now_local.replace(hour=5, minute=30, second=0, microsecond=0).timestamp()
+          end_today = now_local.replace(hour=23, minute=0, second=0, microsecond=0).timestamp()
+          total_sec = end_today - start_today
+          block_sec = total_sec / 3.0
+          pad = min(600, int(block_sec * 0.15))
+
           labels = ["Morning Ping (1/3)", "Midday Ping (2/3)", "Evening Ping (3/3)"]
+          scheduled_pings = []
+          failures = 0
 
           for i in range(3):
-              b_start = start_today + i * block_ms + 600
-              b_end = start_today + (i + 1) * block_ms - 600
-              rand_ts = int(random.uniform(b_start, b_end))
-              pings.append((labels[i], rand_ts))
+              b_start = start_today + i * block_sec
+              b_end = start_today + (i + 1) * block_sec
+              slot_min = max(b_start + pad, now_ts + 120)
+              slot_max = b_end - pad
 
-          topic = "gm-cruzadl-7491"
-          click_url = "https://cruzadl.github.io/gm/?view=ema"
+              if slot_min >= slot_max:
+                  print(f"Skipping {labels[i]} for {today_key} (window already passed).")
+                  continue
 
-          for label, ts in pings:
-              time_str = time.strftime("%H:%M", time.gmtime(ts))
+              rand_ts = random.randint(int(slot_min), int(slot_max))
+              ping_dt = dt.datetime.fromtimestamp(rand_ts, TZ)
+              time_str = ping_dt.strftime("%H:%M")
+              seq_id = f"gm-{today_key}-slot-{i + 1}"
               body_text = f"Momentary check-in ({time_str}). Valid until the next ping arrives - tap when ready."
+
               req = urllib.request.Request(
-                  f"https://ntfy.sh/{topic}",
+                  f"https://ntfy.sh/{TOPIC}",
                   data=body_text.encode("utf-8"),
                   headers={
-                      "Title": f"GM - {label}",
-                      "At": str(ts),
-                      "Click": click_url,
-                      "Tags": "compass,sparkles"
+                      "Title": f"GM - {labels[i]}",
+                      "At": str(rand_ts),
+                      "X-Sequence-ID": seq_id,
+                      "Click": CLICK_URL,
+                      "Tags": "compass,sparkles",
                   },
-                  method="POST"
+                  method="POST",
               )
               try:
-                  with urllib.request.urlopen(req) as resp:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
                       res = json.loads(resp.read().decode("utf-8"))
-                      print(f"Scheduled {label} at {time_str} UTC: {res.get(\"id\")}")
-              except Exception as e:
-                  print(f"Failed to schedule {label}: {e}")
-          '
+                      msg_id = res.get("id")
+                      print(f"Scheduled {labels[i]} at {time_str} {ping_dt.tzname()} ({seq_id}): {msg_id}")
+                      scheduled_pings.append({
+                          "slot": i + 1,
+                          "label": labels[i],
+                          "timestampMs": rand_ts * 1000,
+                          "iso": ping_dt.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+                          "dateKey": today_key,
+                          "sequenceId": seq_id,
+                          "timeFormatted": time_str,
+                          "answered": False,
+                      })
+              except Exception as exc:
+                  failures += 1
+                  print(f"Failed to schedule {labels[i]}: {exc}")
+
+          if gist_token and gist_id and remote_state is not None and scheduled_pings:
+              try:
+                  plan = remote_state.get("activePlan") or {}
+                  plan["scheduledPings"] = scheduled_pings
+                  plan["scheduledDateKey"] = today_key
+                  plan["lastAutoScheduleDateKey"] = today_key
+                  plan["ntfyArmed"] = True
+                  plan["activePlanUpdatedAt"] = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+                  remote_state["activePlan"] = plan
+                  gh_request(
+                      f"https://api.github.com/gists/{gist_id}",
+                      gist_token,
+                      method="PATCH",
+                      payload={"files": {"gm_state.json": {"content": json.dumps(remote_state, indent=2)}}},
+                  )
+                  print("Updated Gist activePlan with fallback pings.")
+              except Exception as exc:
+                  print(f"Warning: failed to update Gist after scheduling ({exc}).")
+
+          if failures > 0:
+              sys.exit(1)
+          EOF
